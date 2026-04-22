@@ -15,7 +15,9 @@
     "strictNullChecks": true,
     "strictBindCallApply": true,
     "allowSyntheticDefaultImports": true,
-    "useUnknownInCatchVariables": true
+    "useUnknownInCatchVariables": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["**/*.ts"]
 }
