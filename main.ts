@@ -26,6 +26,7 @@ type WordSegmenter = {
 const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const JA_CHAR = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const KO_CHAR = /[\p{Script=Hangul}]/u;
+const WHITESPACE = /\s/;
 
 function isCjk(ch: string): boolean {
   return CJK_CHAR.test(ch);
@@ -144,10 +145,40 @@ function segmentAt(state: EditorView["state"], service: SegmenterService, pos: n
   return seg ? { lineFrom: line.from, lineTo: line.to, segment: seg } : null;
 }
 
+/**
+ * True if the contiguous non-whitespace run containing `localPos` holds any CJK char.
+ *
+ * This is the region a word-boundary operation could touch, so it's the right
+ * scope for the activation check. Looking only at the immediate neighbours misses
+ * mixed words like `中文asdf|` where the cursor sits on Latin but the operation
+ * target spans CJK — Obsidian's default categorizer then treats the whole run as
+ * one word and wipes it all.
+ *
+ * Interleaves the whitespace-boundary scan with the CJK check so we short-circuit
+ * on the first CJK char found — essentially O(1) for typical CJK paragraphs.
+ *
+ * CJK is tested on a 2-char window so astral-plane characters (U+20000+, e.g.
+ * CJK Extension B/C/D/E) encoded as UTF-16 surrogate pairs match correctly.
+ * Cursor positions are always at code-point boundaries in CM6, so each window
+ * either contains a full pair or no surrogate at all.
+ */
+function runHasCjk(text: string, localPos: number): boolean {
+  for (let i = localPos - 1; i >= 0; i--) {
+    const ch = text.charAt(i);
+    if (WHITESPACE.test(ch)) break;
+    if (CJK_CHAR.test(text.slice(Math.max(0, i - 1), i + 1))) return true;
+  }
+  for (let i = localPos; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (WHITESPACE.test(ch)) break;
+    if (CJK_CHAR.test(text.slice(i, Math.min(text.length, i + 2)))) return true;
+  }
+  return false;
+}
+
 function hasCjkAround(state: EditorView["state"], pos: number): boolean {
-  // Single slice (≤ 2 chars) covering both neighbours — avoids two separate doc reads
-  const neighbourhood = state.sliceDoc(Math.max(0, pos - 1), Math.min(state.doc.length, pos + 1));
-  return CJK_CHAR.test(neighbourhood);
+  const line = state.doc.lineAt(pos);
+  return runHasCjk(line.text, pos - line.from);
 }
 
 /**
@@ -341,10 +372,11 @@ export default class BambooPlugin extends Plugin {
       const line = this.doc.lineAt(pos);
       const localPos = pos - line.from;
 
-      // Fast-path: skip CJK logic if neither neighbor is CJK
-      const leftCh = localPos > 0 ? line.text[localPos - 1] : "";
-      const rightCh = localPos < line.text.length ? line.text[localPos] : "";
-      if (!isCjk(leftCh ?? "") && !isCjk(rightCh ?? "")) {
+      // Fast-path: skip CJK logic if the surrounding non-whitespace run has no CJK.
+      // Checking only the adjacent chars misses mixed words like `中文asdf` where
+      // a click/select on the Latin tail would otherwise fall back to the original
+      // wordAt and return the whole mixed run.
+      if (!runHasCjk(line.text, localPos)) {
         return original.call(this, pos);
       }
 
