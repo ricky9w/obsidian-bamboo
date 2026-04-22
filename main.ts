@@ -146,39 +146,49 @@ function segmentAt(state: EditorView["state"], service: SegmenterService, pos: n
 }
 
 /**
- * True if the contiguous non-whitespace run containing `localPos` holds any CJK char.
+ * True if the non-whitespace run that an Alt-Backspace / Alt-Delete operation
+ * would reach from `localPos` contains any CJK char.
  *
- * This is the region a word-boundary operation could touch, so it's the right
- * scope for the activation check. Looking only at the immediate neighbours misses
- * mixed words like `中文asdf|` where the cursor sits on Latin but the operation
- * target spans CJK — Obsidian's default categorizer then treats the whole run as
- * one word and wipes it all.
+ * Direction semantics (matches the operation's direction):
+ *   -1 → look backward only; skip whitespace immediately before the cursor, then
+ *        scan the preceding non-whitespace run. Covers `中文 |` + Alt-Backspace,
+ *        where the cursor is separated from CJK by trailing whitespace.
+ *    1 → look forward only; symmetric.
+ *    0 → bidirectional (used by wordAt / double-click).
  *
  * Interleaves the whitespace-boundary scan with the CJK check so we short-circuit
- * on the first CJK char found — essentially O(1) for typical CJK paragraphs.
+ * on the first CJK char found — essentially O(1) for typical CJK content.
  *
  * CJK is tested on a 2-char window so astral-plane characters (U+20000+, e.g.
  * CJK Extension B/C/D/E) encoded as UTF-16 surrogate pairs match correctly.
  * Cursor positions are always at code-point boundaries in CM6, so each window
  * either contains a full pair or no surrogate at all.
  */
-function runHasCjk(text: string, localPos: number): boolean {
-  for (let i = localPos - 1; i >= 0; i--) {
-    const ch = text.charAt(i);
-    if (WHITESPACE.test(ch)) break;
-    if (CJK_CHAR.test(text.slice(Math.max(0, i - 1), i + 1))) return true;
+function runHasCjk(text: string, localPos: number, direction: 1 | -1 | 0 = 0): boolean {
+  if (direction <= 0) {
+    let i = localPos - 1;
+    while (i >= 0 && WHITESPACE.test(text.charAt(i))) i--;
+    for (; i >= 0; i--) {
+      const ch = text.charAt(i);
+      if (WHITESPACE.test(ch)) break;
+      if (CJK_CHAR.test(text.slice(Math.max(0, i - 1), i + 1))) return true;
+    }
   }
-  for (let i = localPos; i < text.length; i++) {
-    const ch = text.charAt(i);
-    if (WHITESPACE.test(ch)) break;
-    if (CJK_CHAR.test(text.slice(i, Math.min(text.length, i + 2)))) return true;
+  if (direction >= 0) {
+    let j = localPos;
+    while (j < text.length && WHITESPACE.test(text.charAt(j))) j++;
+    for (; j < text.length; j++) {
+      const ch = text.charAt(j);
+      if (WHITESPACE.test(ch)) break;
+      if (CJK_CHAR.test(text.slice(j, Math.min(text.length, j + 2)))) return true;
+    }
   }
   return false;
 }
 
-function hasCjkAround(state: EditorView["state"], pos: number): boolean {
+function hasCjkAround(state: EditorView["state"], pos: number, direction: 1 | -1 | 0 = 0): boolean {
   const line = state.doc.lineAt(pos);
-  return runHasCjk(line.text, pos - line.from);
+  return runHasCjk(line.text, pos - line.from, direction);
 }
 
 /**
@@ -228,7 +238,7 @@ function nextBoundary(state: EditorView["state"], service: SegmenterService, pos
 function moveGroupBySegmenter(service: SegmenterService, direction: 1 | -1, extend: boolean) {
   return (view: EditorView): boolean => {
     const { state } = view;
-    if (!hasCjkAround(state, state.selection.main.head)) return false;
+    if (!hasCjkAround(state, state.selection.main.head, direction)) return false;
 
     const prev = state.selection;
     const nextRanges = prev.ranges.map((range) => {
@@ -254,7 +264,7 @@ function moveGroupBySegmenter(service: SegmenterService, direction: 1 | -1, exte
 function deleteWordBySegmenter(service: SegmenterService, direction: 1 | -1) {
   return (view: EditorView): boolean => {
     const { state } = view;
-    if (!hasCjkAround(state, state.selection.main.head)) return false;
+    if (!hasCjkAround(state, state.selection.main.head, direction)) return false;
 
     const changes = state.changeByRange((range) => {
       // If something is already selected, just delete the selection
