@@ -1,7 +1,7 @@
 {
   "id": "bamboo",
   "name": "Bamboo",
-  "version": "1.0.0-ricky.2",
+  "version": "1.0.0-ricky.3",
   "minAppVersion": "1.0.0",
   "description": "Enable proper word selection for Chinese, Japanese, and Korean (CJK) text.",
   "author": "Alexis C",
